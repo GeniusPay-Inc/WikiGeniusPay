@@ -1,0 +1,311 @@
+{
+  "name": "Wiki · Backoffice admin",
+  "nodes": [
+    {
+      "id": "f3a24dff-6199-4af3-a7f9-ee61b80368a9",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-320, -320],
+      "parameters": {
+        "width": 620,
+        "height": 260,
+        "content": "## Backoffice — accès restreint\nTrois entrées, toutes protégées par Basic Auth (credential \"Backoffice Wiki\", valeurs ADMIN_BASIC_AUTH_USER / ADMIN_BASIC_AUTH_PASSWORD) et à doubler d'une policy Cloudflare Access par email.\n\n- Formulaire \"Nouveau document\" → relaie vers le webhook d'ingestion.\n- GET /webhook/admin/documents → liste des documents.\n- POST /webhook/admin/reindex → ré-indexe un document existant (nouveau fichier)."
+      }
+    },
+    {
+      "id": "e5f1daa8-335a-461e-8972-3a0c4e359003",
+      "name": "Formulaire nouveau document",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [-320, 60],
+      "webhookId": "484d3b71-24f9-4aba-b46d-60aee8ee328e",
+      "parameters": {
+        "authentication": "basicAuth",
+        "formTitle": "Wiki GeniusPay — Nouveau document",
+        "formDescription": "Ajouter un document au wiki interne",
+        "formFields": {
+          "values": [
+            { "fieldLabel": "Titre", "requiredField": true },
+            {
+              "fieldLabel": "Catégorie",
+              "fieldType": "dropdown",
+              "fieldOptions": { "values": [
+                { "option": "Projets" },
+                { "option": "Conditionnalités" },
+                { "option": "Présentations" },
+                { "option": "Procédures" }
+              ] },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Statut",
+              "fieldType": "dropdown",
+              "fieldOptions": { "values": [
+                { "option": "dynamique" },
+                { "option": "fige" }
+              ] },
+              "requiredField": true
+            },
+            { "fieldLabel": "Fichier", "fieldType": "file", "requiredField": true },
+            { "fieldLabel": "Auteur", "requiredField": false }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "backoffice-wiki",
+          "name": "Backoffice Wiki"
+        }
+      }
+    },
+    {
+      "id": "06a12399-1f0b-47ff-8f81-43688791309f",
+      "name": "Relayer vers ingestion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-60, 60],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_WEBHOOK_URL + '/admin/upload' }}",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "title", "value": "={{ $json['Titre'] }}" },
+            { "name": "category", "value": "={{ $json['Catégorie'] }}" },
+            { "name": "status", "value": "={{ $json['Statut'] }}" },
+            { "name": "created_by", "value": "={{ $json['Auteur'] }}" },
+            { "parameterType": "formBinaryData", "name": "file", "inputDataFieldName": "Fichier" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "7e41c1ac-2264-4cb5-8ef2-d8eaac72bf3d",
+      "name": "Confirmation",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [200, 60],
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Document reçu",
+        "completionMessage": "Le document est en cours d'indexation. Il sera disponible dans le chat sous quelques instants."
+      }
+    },
+    {
+      "id": "44d35ec8-18e0-44b0-84d0-e5c747a4acc7",
+      "name": "Webhook Liste documents",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-320, 320],
+      "webhookId": "1b5aa301-005a-4915-8cbe-c038212754d5",
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "admin/documents",
+        "authentication": "basicAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "backoffice-wiki",
+          "name": "Backoffice Wiki"
+        }
+      }
+    },
+    {
+      "id": "f8897079-7210-4350-bb30-437c35688e67",
+      "name": "Lister documents",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-60, 320],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, title, category, status, created_by, created_at, updated_at\nFROM documents\nORDER BY created_at DESC;"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "wiki-db",
+          "name": "Wiki DB (Postgres)"
+        }
+      }
+    },
+    {
+      "id": "61fae1f2-0c4f-45f9-840f-92922218b6df",
+      "name": "Réponse liste",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [200, 320],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $input.all().map(i => i.json) }}"
+      }
+    },
+    {
+      "id": "c488cd08-6c40-41a9-8e14-8d6f6de4f202",
+      "name": "Webhook Réindexation",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-320, 580],
+      "webhookId": "c5408320-3eac-4f55-a6f2-e46df75f0583",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "admin/reindex",
+        "authentication": "basicAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "backoffice-wiki",
+          "name": "Backoffice Wiki"
+        }
+      }
+    },
+    {
+      "id": "681a7b44-cbeb-406d-9b48-e9994be1e0f4",
+      "name": "Purger anciens chunks",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-60, 580],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM chunks WHERE document_id = $1;\nUPDATE documents SET updated_at = now() WHERE id = $1 RETURNING id, title, category, status;",
+        "options": {
+          "queryReplacement": "={{ [$json.body.document_id] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "wiki-db",
+          "name": "Wiki DB (Postgres)"
+        }
+      }
+    },
+    {
+      "id": "e4b3d841-8dee-4bdc-94a6-b5e6644567a5",
+      "name": "Extraire le texte",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [200, 580],
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "file",
+        "options": {}
+      }
+    },
+    {
+      "id": "433a1380-fc1b-435c-b56c-b1965ab311a3",
+      "name": "Découper en chunks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 580],
+      "parameters": {
+        "jsCode": "const chunkSize = 800;\nconst overlap = 120;\nconst text = ($json.text || '').replace(/\\s+/g, ' ').trim();\nconst documentId = $('Webhook Réindexation').first().json.body.document_id;\n\nconst chunks = [];\nlet start = 0;\nlet index = 0;\nwhile (start < text.length) {\n  const end = Math.min(start + chunkSize, text.length);\n  const content = text.slice(start, end).trim();\n  if (content.length > 0) {\n    chunks.push({ json: { document_id: documentId, chunk_index: index, content } });\n    index += 1;\n  }\n  if (end === text.length) break;\n  start = end - overlap;\n}\n\nreturn chunks;"
+      }
+    },
+    {
+      "id": "2e87299a-4445-47b1-b657-55270c6d9924",
+      "name": "Pour chaque chunk",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [680, 580],
+      "parameters": { "batchSize": 1, "options": {} }
+    },
+    {
+      "id": "f8fe11cc-aa93-471c-a91a-3e8eac92d4e2",
+      "name": "Générer embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, 500],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $env.EMBEDDING_MODEL || 'text-embedding-3-small', input: $json.content }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "openai-embeddings",
+          "name": "OpenAI Embeddings"
+        }
+      }
+    },
+    {
+      "id": "c73ab5bd-e3c1-4a3f-ac91-dbfce03a962b",
+      "name": "Insérer chunk",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1180, 500],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO chunks (document_id, content, embedding, chunk_index)\nVALUES ($1, $2, $3, $4);",
+        "options": {
+          "queryReplacement": "={{ [$('Pour chaque chunk').item.json.document_id, $('Pour chaque chunk').item.json.content, JSON.stringify($json.data[0].embedding), $('Pour chaque chunk').item.json.chunk_index] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "wiki-db",
+          "name": "Wiki DB (Postgres)"
+        }
+      }
+    },
+    {
+      "id": "ebe1a443-f05d-44c4-bfb7-6b50a5ccbcce",
+      "name": "Réponse réindexation",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [940, 700],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: true, document: $('Purger anciens chunks').first().json } }}"
+      }
+    }
+  ],
+  "connections": {
+    "Formulaire nouveau document": {
+      "main": [[{ "node": "Relayer vers ingestion", "type": "main", "index": 0 }]]
+    },
+    "Relayer vers ingestion": {
+      "main": [[{ "node": "Confirmation", "type": "main", "index": 0 }]]
+    },
+    "Webhook Liste documents": {
+      "main": [[{ "node": "Lister documents", "type": "main", "index": 0 }]]
+    },
+    "Lister documents": {
+      "main": [[{ "node": "Réponse liste", "type": "main", "index": 0 }]]
+    },
+    "Webhook Réindexation": {
+      "main": [[{ "node": "Purger anciens chunks", "type": "main", "index": 0 }]]
+    },
+    "Purger anciens chunks": {
+      "main": [[{ "node": "Extraire le texte", "type": "main", "index": 0 }]]
+    },
+    "Extraire le texte": {
+      "main": [[{ "node": "Découper en chunks", "type": "main", "index": 0 }]]
+    },
+    "Découper en chunks": {
+      "main": [[{ "node": "Pour chaque chunk", "type": "main", "index": 0 }]]
+    },
+    "Pour chaque chunk": {
+      "main": [[{ "node": "Réponse réindexation", "type": "main", "index": 0 }], [{ "node": "Générer embedding", "type": "main", "index": 0 }]]
+    },
+    "Générer embedding": {
+      "main": [[{ "node": "Insérer chunk", "type": "main", "index": 0 }]]
+    },
+    "Insérer chunk": {
+      "main": [[{ "node": "Pour chaque chunk", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

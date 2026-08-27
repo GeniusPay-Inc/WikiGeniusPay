@@ -65,8 +65,8 @@ Architecture orchestrée entièrement par **n8n**, avec **PostgreSQL + pgvector*
 ## Modules fonctionnels
 
 **1. Ingestion**
-Responsabilité : surveillance d'une source (dossier, Drive), extraction du texte, découpage en chunks, génération d'embeddings, écriture en base.
-Déclenchement : automatique à l'ajout/modification d'un document, ou manuel depuis le backoffice.
+Responsabilité : extraction du texte du document reçu, découpage en chunks avec chevauchement, génération d'embeddings (OpenAI), écriture en base (`documents` + `chunks`).
+Déclenchement : webhook `/admin/upload`, appelé par le formulaire du backoffice — ou directement par un futur watcher de dossier/Drive branché sur ce même webhook.
 
 **2. Requête publique (Chat)**
 Responsabilité : réception d'une question en langage naturel, recherche par similarité vectorielle, injection du contexte au LLM, réponse sourcée.
@@ -84,9 +84,10 @@ Responsabilité : précompilation du contexte pour les contenus stables (procéd
 | Méthode | Route | Description | Consommateur |
 |---|---|---|---|
 | POST | `/webhook/chat` | Reçoit une question et renvoie une réponse sourcée | Widget chat public |
-| POST | `/webhook/admin/upload` | Ingestion d'un nouveau document + métadonnées | Backoffice |
-| POST | `/webhook/admin/reindex` | Déclenche une réindexation manuelle d'un document | Backoffice |
+| POST | `/webhook/admin/upload` | Ingestion d'un nouveau document + métadonnées | Backoffice (formulaire) |
+| POST | `/webhook/admin/reindex` | Ré-indexe un document existant avec un nouveau fichier | Backoffice |
 | GET | `/webhook/admin/documents` | Liste des documents avec statut et catégorie | Backoffice |
+| POST | `/webhook/admin/rebuild-cache` | Recompile manuellement le cache figé par catégorie | Backoffice |
 
 ## Stack technique
 
@@ -114,15 +115,22 @@ cd geniuspay-wiki-rag
 
 # 2. Configuration
 cp .env.example .env
+# renseigner DB_PASSWORD, ANTHROPIC_API_KEY, EMBEDDING_API_KEY,
+# ADMIN_BASIC_AUTH_USER/PASSWORD, N8N_HOST, N8N_WEBHOOK_URL
 
-# 3. Lancer les conteneurs
+# 3. Lancer les conteneurs (Postgres+pgvector applique automatiquement
+#    database/migrations/*.sql au premier démarrage)
 docker compose up -d
 
-# 4. Activer l'extension pgvector
-docker exec -it wiki-db psql -U geniuspay -d geniuspay_wiki -c "CREATE EXTENSION IF NOT EXISTS vector;"
-
-# 5. Importer les workflows n8n
-# Depuis l'éditeur n8n : Import from File > workflows/*.json
+# 4. Importer les workflows n8n
+# Éditeur n8n (https://n8n.geniuspay.ci) > Import from File :
+#   - workflows/ingestion.json
+#   - workflows/chat-public.json
+#   - workflows/admin-backoffice.json
+#   - workflows/static-cache-rebuild.json
+# Puis, pour chaque workflow : assigner les credentials (Postgres,
+# HTTP Header Auth OpenAI/Anthropic, Basic Auth backoffice — voir la
+# sticky note en haut de chaque workflow) et l'Activer.
 ```
 
 ## Configuration
@@ -145,9 +153,13 @@ DB_PASSWORD=secret
 N8N_HOST=n8n.geniuspay.ci
 N8N_WEBHOOK_URL=https://wiki.geniuspay.ci/webhook
 
-# LLM
-LLM_API_KEY=your-api-key
+# LLM (génération — Anthropic)
+ANTHROPIC_API_KEY=your-anthropic-api-key
 LLM_MODEL=claude-sonnet-5
+
+# Embeddings (indexation & recherche — OpenAI, 1536 dimensions)
+EMBEDDING_API_KEY=your-openai-api-key
+EMBEDDING_MODEL=text-embedding-3-small
 
 # Backoffice
 ADMIN_BASIC_AUTH_USER=admin
@@ -158,12 +170,16 @@ ADMIN_BASIC_AUTH_PASSWORD=secret
 
 ```
 geniuspay-wiki-rag/
-├── workflows/                   # Exports JSON des workflows n8n
-│   ├── ingestion.json
-│   ├── chat-public.json
-│   └── admin-backoffice.json
+├── workflows/                     # Exports JSON des workflows n8n (à importer)
+│   ├── ingestion.json             # Webhook /admin/upload → extraction, chunking, embeddings
+│   ├── chat-public.json           # Chat Trigger public → recherche vectorielle + Claude
+│   ├── admin-backoffice.json      # Formulaire upload + /admin/documents + /admin/reindex
+│   └── static-cache-rebuild.json  # Cron + webhook → recompile le cache figé par catégorie
 ├── database/
-│   └── migrations/               # Schéma Postgres (documents, chunks, embeddings)
+│   └── migrations/
+│       └── 001_create_wiki_schema.sql   # documents, chunks (pgvector), static_cache
+├── docs/
+│   └── ADR-001-wiki-rag.md        # Décisions d'architecture
 ├── docker-compose.yml
 ├── .env.example
 └── README.md

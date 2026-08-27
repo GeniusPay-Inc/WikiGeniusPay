@@ -1,0 +1,136 @@
+{
+  "name": "Wiki · Cache figé",
+  "nodes": [
+    {
+      "id": "8cd82864-608c-454d-8afa-5bdecd3066fd",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-320, -220],
+      "parameters": {
+        "width": 560,
+        "height": 260,
+        "content": "## Cache figé\nRecompile `static_cache.compiled_context` par catégorie à partir des documents `status = 'fige'`.\n\nDéclenché :\n- automatiquement chaque nuit (Schedule Trigger) ;\n- manuellement depuis le backoffice (webhook `/admin/rebuild-cache`) ou après ingestion d'un document figé (voir workflows/ingestion.json).\n\nNote MVP : le workflow de chat public interroge aujourd'hui directement `chunks` par recherche vectorielle pour tous les statuts. `static_cache` est une extension prête à brancher pour un accès quasi instantané sur les sujets figés (ex. via un routeur de questions par mots-clés de catégorie)."
+      }
+    },
+    {
+      "id": "e5f383a4-b4c6-4343-8dd5-34d21a50c953",
+      "name": "Chaque nuit à 3h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-320, 60],
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 3 * * *" }] }
+      }
+    },
+    {
+      "id": "30a4197e-b721-4d02-b403-38014bd59137",
+      "name": "Déclenchement manuel",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-320, 260],
+      "webhookId": "65fedc82-ce26-483c-b238-f632c701f82c",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "admin/rebuild-cache",
+        "authentication": "basicAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "backoffice-wiki",
+          "name": "Backoffice Wiki"
+        }
+      }
+    },
+    {
+      "id": "5ea7fb77-c2c0-401c-8548-22422c7ce2b6",
+      "name": "Catégories figées",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-60, 160],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT DISTINCT category FROM documents WHERE status = 'fige';"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "wiki-db",
+          "name": "Wiki DB (Postgres)"
+        }
+      }
+    },
+    {
+      "id": "5f5ba13b-75ac-4db2-8ff7-fc07c4e00c9a",
+      "name": "Pour chaque catégorie",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [180, 160],
+      "parameters": { "batchSize": 1, "options": {} }
+    },
+    {
+      "id": "83490f33-0719-4dbd-9e6e-f5c17af48f6f",
+      "name": "Compiler le contexte",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [440, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT string_agg(c.content, E'\\n\\n' ORDER BY d.title, c.chunk_index) AS compiled\nFROM chunks c\nJOIN documents d ON d.id = c.document_id\nWHERE d.category = $1 AND d.status = 'fige';",
+        "options": {
+          "queryReplacement": "={{ [$json.category] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "wiki-db",
+          "name": "Wiki DB (Postgres)"
+        }
+      }
+    },
+    {
+      "id": "ec43a6d3-a10c-4823-88ba-4f3398da19c5",
+      "name": "Sauvegarder le cache",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [700, 80],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO static_cache (category, compiled_context)\nVALUES ($1, $2)\nON CONFLICT (category)\nDO UPDATE SET compiled_context = EXCLUDED.compiled_context, regenerated_at = now();",
+        "options": {
+          "queryReplacement": "={{ [$('Pour chaque catégorie').item.json.category, $json.compiled || ''] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "wiki-db",
+          "name": "Wiki DB (Postgres)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Chaque nuit à 3h": {
+      "main": [[{ "node": "Catégories figées", "type": "main", "index": 0 }]]
+    },
+    "Déclenchement manuel": {
+      "main": [[{ "node": "Catégories figées", "type": "main", "index": 0 }]]
+    },
+    "Catégories figées": {
+      "main": [[{ "node": "Pour chaque catégorie", "type": "main", "index": 0 }]]
+    },
+    "Pour chaque catégorie": {
+      "main": [[], [{ "node": "Compiler le contexte", "type": "main", "index": 0 }]]
+    },
+    "Compiler le contexte": {
+      "main": [[{ "node": "Sauvegarder le cache", "type": "main", "index": 0 }]]
+    },
+    "Sauvegarder le cache": {
+      "main": [[{ "node": "Pour chaque catégorie", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

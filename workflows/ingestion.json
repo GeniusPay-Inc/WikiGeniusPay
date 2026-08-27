@@ -1,0 +1,199 @@
+{
+  "name": "Wiki · Ingestion",
+  "nodes": [
+    {
+      "id": "ffc33b8b-6285-401a-b3de-713c776fe6ef",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-260, -180],
+      "parameters": {
+        "width": 480,
+        "height": 300,
+        "content": "## Ingestion\nDéclenché par le backoffice (Execute Workflow) ou directement via webhook.\n\nAvant activation :\n1. Créer la credential **Postgres** (wiki-db) et l'assigner à tous les nodes Postgres.\n2. Créer la credential **HTTP Header Auth** \"OpenAI Embeddings\" avec `Authorization: Bearer $EMBEDDING_API_KEY`.\n3. Adapter le node *Extraire le texte* selon le type de fichier reçu (pdf/docx/txt).\n4. `chunk_size` / `overlap` réglables dans le node Code *Découper en chunks*."
+      }
+    },
+    {
+      "id": "159eb337-2c8b-45d3-90a4-799f804e0cd0",
+      "name": "Webhook Upload",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-260, 180],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "admin/upload",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "2643a733-71ed-468e-a69c-3cb10a9c9109"
+    },
+    {
+      "id": "f3ad4d93-d4d9-498a-926f-fb78ecf8825e",
+      "name": "Extraire le texte",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [0, 180],
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "file",
+        "options": {}
+      }
+    },
+    {
+      "id": "cc577c6e-e5c8-417b-8970-67ec7a551aa4",
+      "name": "Insérer document",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [260, 180],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO documents (title, category, status, source_path, created_by)\nVALUES ($1, $2, $3, $4, $5)\nRETURNING id, title, category, status;",
+        "options": {
+          "queryReplacement": "={{ [$('Webhook Upload').item.json.body.title, $('Webhook Upload').item.json.body.category, $('Webhook Upload').item.json.body.status || 'dynamique', $('Webhook Upload').item.json.body.source_path || '', $('Webhook Upload').item.json.body.created_by || ''] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "wiki-db",
+          "name": "Wiki DB (Postgres)"
+        }
+      }
+    },
+    {
+      "id": "0c9038a5-a732-4325-ba4c-07ef99af4b7d",
+      "name": "Découper en chunks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 180],
+      "parameters": {
+        "jsCode": "const chunkSize = 800;\nconst overlap = 120;\nconst text = ($('Extraire le texte').first().json.text || '').replace(/\\s+/g, ' ').trim();\nconst document = $('Insérer document').first().json;\n\nconst chunks = [];\nlet start = 0;\nlet index = 0;\nwhile (start < text.length) {\n  const end = Math.min(start + chunkSize, text.length);\n  const content = text.slice(start, end).trim();\n  if (content.length > 0) {\n    chunks.push({ json: { document_id: document.id, chunk_index: index, content } });\n    index += 1;\n  }\n  if (end === text.length) break;\n  start = end - overlap;\n}\n\nreturn chunks;"
+      }
+    },
+    {
+      "id": "716f96bc-89cd-4144-b3f0-d6064ffe6f1e",
+      "name": "Pour chaque chunk",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [780, 180],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "cec5ffe8-32a8-4b9d-8eac-83e227f79466",
+      "name": "Générer embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 100],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $env.EMBEDDING_MODEL || 'text-embedding-3-small', input: $json.content }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "openai-embeddings",
+          "name": "OpenAI Embeddings"
+        }
+      }
+    },
+    {
+      "id": "d86251d7-2896-40ee-9eee-2eb9bb2c8535",
+      "name": "Insérer chunk",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1300, 100],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO chunks (document_id, content, embedding, chunk_index)\nVALUES ($1, $2, $3, $4);",
+        "options": {
+          "queryReplacement": "={{ [$('Pour chaque chunk').item.json.document_id, $('Pour chaque chunk').item.json.content, JSON.stringify($json.data[0].embedding), $('Pour chaque chunk').item.json.chunk_index] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "wiki-db",
+          "name": "Wiki DB (Postgres)"
+        }
+      }
+    },
+    {
+      "id": "533e3ef0-ea74-4974-acfd-ab946579e87a",
+      "name": "Statut figé ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [780, 420],
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $('Insérer document').first().json.status }}",
+              "rightValue": "fige",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "299503b2-6f5f-4ff6-a317-80848d538bcf",
+      "name": "Régénérer le cache figé",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [1040, 420],
+      "parameters": {
+        "source": "parameter",
+        "workflowJson": "={{ }}",
+        "mode": "each"
+      },
+      "notesInFlow": true,
+      "notes": "Remplacer par un lien vers le workflow 'Wiki · Cache figé' (Execute Workflow > By ID) une fois importé."
+    },
+    {
+      "id": "b84e2be4-7186-415f-bc2e-d48166f1f87a",
+      "name": "Réponse OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1560, 180],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: true, document: $('Insérer document').first().json } }}"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Upload": {
+      "main": [[{ "node": "Extraire le texte", "type": "main", "index": 0 }]]
+    },
+    "Extraire le texte": {
+      "main": [[{ "node": "Insérer document", "type": "main", "index": 0 }]]
+    },
+    "Insérer document": {
+      "main": [[{ "node": "Découper en chunks", "type": "main", "index": 0 }, { "node": "Statut figé ?", "type": "main", "index": 0 }]]
+    },
+    "Découper en chunks": {
+      "main": [[{ "node": "Pour chaque chunk", "type": "main", "index": 0 }]]
+    },
+    "Pour chaque chunk": {
+      "main": [[{ "node": "Réponse OK", "type": "main", "index": 0 }], [{ "node": "Générer embedding", "type": "main", "index": 0 }]]
+    },
+    "Générer embedding": {
+      "main": [[{ "node": "Insérer chunk", "type": "main", "index": 0 }]]
+    },
+    "Insérer chunk": {
+      "main": [[{ "node": "Pour chaque chunk", "type": "main", "index": 0 }]]
+    },
+    "Statut figé ?": {
+      "main": [[{ "node": "Régénérer le cache figé", "type": "main", "index": 0 }], []]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}
