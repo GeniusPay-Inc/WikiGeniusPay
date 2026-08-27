@@ -1,0 +1,41 @@
+services:
+  wiki-db:
+    image: pgvector/pgvector:pg16
+    container_name: wiki-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: geniuspay_wiki
+      POSTGRES_USER: geniuspay
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - wiki-db-data:/var/lib/postgresql/data
+      - ./database/migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5433:5432"
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: wiki-n8n
+    restart: unless-stopped
+    environment:
+      N8N_HOST: ${N8N_HOST}
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL}
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: wiki-db
+      DB_POSTGRESDB_DATABASE: geniuspay_wiki
+      DB_POSTGRESDB_USER: geniuspay
+      DB_POSTGRESDB_PASSWORD: ${DB_PASSWORD}
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${ADMIN_BASIC_AUTH_USER}
+      N8N_BASIC_AUTH_PASSWORD: ${ADMIN_BASIC_AUTH_PASSWORD}
+    volumes:
+      - wiki-n8n-data:/home/node/.n8n
+      - ./workflows:/home/node/workflows
+    depends_on:
+      - wiki-db
+    ports:
+      - "5678:5678"
+
+volumes:
+  wiki-db-data:
+  wiki-n8n-data:
