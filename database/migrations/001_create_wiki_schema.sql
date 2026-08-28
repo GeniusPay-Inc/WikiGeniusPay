@@ -23,9 +23,11 @@ CREATE TABLE chunks (
 CREATE INDEX chunks_embedding_idx ON chunks
     USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 
+CREATE INDEX documents_category_status_idx ON documents (category, status);
+
 CREATE TABLE static_cache (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    category TEXT NOT NULL,
+    category TEXT NOT NULL UNIQUE,
     compiled_context TEXT NOT NULL,
     regenerated_at TIMESTAMPTZ DEFAULT now()
 );

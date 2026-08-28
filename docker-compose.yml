@@ -10,8 +10,10 @@ services:
     volumes:
       - wiki-db-data:/var/lib/postgresql/data
       - ./database/migrations:/docker-entrypoint-initdb.d
-    ports:
-      - "5433:5432"
+    # Pas de port publié : n8n atteint wiki-db via le réseau interne Docker.
+    # Décommenter uniquement pour du debug local (psql depuis l'hôte).
+    # ports:
+    #   - "5433:5432"
 
   n8n:
     image: n8nio/n8n:latest
@@ -19,7 +21,11 @@ services:
     restart: unless-stopped
     environment:
       N8N_HOST: ${N8N_HOST}
+      N8N_PROTOCOL: https
+      N8N_EDITOR_BASE_URL: https://${N8N_HOST}
       WEBHOOK_URL: ${N8N_WEBHOOK_URL}
+      N8N_PROXY_HOPS: 1
+      GENERIC_TIMEZONE: Africa/Abidjan
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: wiki-db
       DB_POSTGRESDB_DATABASE: geniuspay_wiki
@@ -28,6 +34,11 @@ services:
       N8N_BASIC_AUTH_ACTIVE: "true"
       N8N_BASIC_AUTH_USER: ${ADMIN_BASIC_AUTH_USER}
       N8N_BASIC_AUTH_PASSWORD: ${ADMIN_BASIC_AUTH_PASSWORD}
+      # Exposées aux expressions {{ $env.XXX }} des workflows importés
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      LLM_MODEL: ${LLM_MODEL}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL}
     volumes:
       - wiki-n8n-data:/home/node/.n8n
       - ./workflows:/home/node/workflows

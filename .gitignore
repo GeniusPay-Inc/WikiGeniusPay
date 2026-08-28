@@ -1,0 +1,9 @@
+.env
+*.env.local
+
+# n8n runtime data (si exécuté hors Docker)
+.n8n/
+
+# OS / éditeurs
+.DS_Store
+*.swp

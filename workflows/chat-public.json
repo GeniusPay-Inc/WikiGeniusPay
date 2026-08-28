@@ -1,0 +1,148 @@
+{
+  "name": "Wiki · Chat public",
+  "nodes": [
+    {
+      "id": "b045084b-9871-4e8f-b0ed-26bdc7bdf30f",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-260, -200],
+      "parameters": {
+        "width": 520,
+        "height": 320,
+        "content": "## Chat public — wiki.geniuspay.ci\nPoint d'entrée exposé à tous, sans authentification.\n\nAvant activation :\n1. Assigner la credential Postgres (wiki-db) au node *Recherche vectorielle*.\n2. Assigner la credential HTTP Header Auth \"OpenAI Embeddings\" au node *Embedding de la question*.\n3. Assigner la credential HTTP Header Auth \"Anthropic API\" (`x-api-key`) au node *Appel Claude*.\n4. Aucune donnée sensible ne doit être indexée dans le corpus interrogé ici (voir docs/ADR-001-wiki-rag.md).\n5. Extension possible : router les questions par catégorie vers `static_cache` pour les sujets figés avant de lancer la recherche vectorielle."
+      }
+    },
+    {
+      "id": "d1289837-d45c-4f00-80ec-b1302492c541",
+      "name": "Réception question",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [-260, 180],
+      "webhookId": "c63f8490-4835-4c43-8cd1-5e6872190305",
+      "parameters": {
+        "mode": "webhook",
+        "public": true,
+        "path": "chat",
+        "options": {
+          "title": "Wiki GeniusPay",
+          "subtitle": "Posez une question sur GENIUS GROUPS",
+          "initialMessages": "Bonjour ! Posez-moi une question sur les projets, procédures ou conditionnalités de GENIUS GROUPS."
+        }
+      }
+    },
+    {
+      "id": "61a34b4e-b574-442e-9413-9430a28119f5",
+      "name": "Embedding de la question",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [0, 180],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $env.EMBEDDING_MODEL || 'text-embedding-3-small', input: $json.chatInput }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "openai-embeddings",
+          "name": "OpenAI Embeddings"
+        }
+      }
+    },
+    {
+      "id": "6270803f-b295-440d-b75a-5a8ac94710e6",
+      "name": "Recherche vectorielle",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [260, 180],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT d.title, d.category, d.status, d.source_path, c.content,\n       1 - (c.embedding <=> $1) AS similarity\nFROM chunks c\nJOIN documents d ON d.id = c.document_id\nORDER BY c.embedding <=> $1\nLIMIT 6;",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json.data[0].embedding)] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "wiki-db",
+          "name": "Wiki DB (Postgres)"
+        }
+      }
+    },
+    {
+      "id": "089ac5fe-edd5-4946-9343-009177a4bbaf",
+      "name": "Construire le contexte",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 180],
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nconst question = $('Réception question').first().json.chatInput;\n\nconst context = rows\n  .map((r, i) => `[Source ${i + 1} — ${r.title} (${r.category})]\\n${r.content}`)\n  .join('\\n\\n');\n\nconst sources = [...new Set(rows.map(r => r.title))];\n\nreturn [{ json: { question, context, sources } }];"
+      }
+    },
+    {
+      "id": "9c9b70c6-8535-4f34-b1f8-1fa3fe05e418",
+      "name": "Appel Claude",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [780, 180],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $env.LLM_MODEL || 'claude-sonnet-5', max_tokens: 1024, system: \"Tu es l'assistant du wiki interne de GENIUS GROUPS. Réponds en français, uniquement à partir du CONTEXTE fourni. Si le contexte ne permet pas de répondre, dis-le clairement plutôt que d'inventer. Cite les documents sources entre parenthèses.\", messages: [{ role: 'user', content: `CONTEXTE:\\n${$json.context}\\n\\nQUESTION:\\n${$json.question}` }] }) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic-api",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "id": "d8de899e-404d-4de5-b278-d67665a36990",
+      "name": "Formater la réponse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1040, 180],
+      "parameters": {
+        "jsCode": "const answer = $json.content?.[0]?.text || \"Désolé, je n'ai pas pu générer de réponse.\";\nconst sources = $('Construire le contexte').first().json.sources || [];\nconst footer = sources.length ? `\\n\\nSources : ${sources.join(', ')}` : '';\n\nreturn [{ json: { output: answer + footer } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Réception question": {
+      "main": [[{ "node": "Embedding de la question", "type": "main", "index": 0 }]]
+    },
+    "Embedding de la question": {
+      "main": [[{ "node": "Recherche vectorielle", "type": "main", "index": 0 }]]
+    },
+    "Recherche vectorielle": {
+      "main": [[{ "node": "Construire le contexte", "type": "main", "index": 0 }]]
+    },
+    "Construire le contexte": {
+      "main": [[{ "node": "Appel Claude", "type": "main", "index": 0 }]]
+    },
+    "Appel Claude": {
+      "main": [[{ "node": "Formater la réponse", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}
