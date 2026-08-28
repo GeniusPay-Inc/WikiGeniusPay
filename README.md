@@ -101,6 +101,8 @@ Responsabilité : précompilation du contexte pour les contenus stables (procéd
 
 ## Démarrage rapide
 
+> Guide complet pas à pas (DNS, Coolify, credentials n8n, tests) : [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md).
+
 ### Prérequis
 - Docker & Docker Compose
 - PostgreSQL 16+ avec extension `pgvector`
